@@ -223,3 +223,273 @@
             </div>
         </div>
     </div>
+        <script>
+        // Data storage
+        let projects = JSON.parse(localStorage.getItem('projectai_projects') || '[]');
+        let tasks = JSON.parse(localStorage.getItem('projectai_tasks') || '[]');
+        let nextProjectId = parseInt(localStorage.getItem('projectai_nextProjectId') || '1');
+        let nextTaskId = parseInt(localStorage.getItem('projectai_nextTaskId') || '1');
+
+        // Save to localStorage
+        function saveData() {
+            localStorage.setItem('projectai_projects', JSON.stringify(projects));
+            localStorage.setItem('projectai_tasks', JSON.stringify(tasks));
+            localStorage.setItem('projectai_nextProjectId', nextProjectId.toString());
+            localStorage.setItem('projectai_nextTaskId', nextTaskId.toString());
+        }
+
+        // Load dashboard on startup
+        loadDashboard();
+
+        // Upload area events
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#667eea';
+            uploadArea.style.background = '#e6fffa';
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.borderColor = '#cbd5e0';
+            uploadArea.style.background = '#f7fafc';
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#cbd5e0';
+            uploadArea.style.background = '#f7fafc';
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        document.getElementById('back-btn').addEventListener('click', () => {
+            document.getElementById('project-view').classList.add('hidden');
+            document.getElementById('dashboard-view').classList.remove('hidden');
+            loadDashboard();
+        });
+
+        function handleFile(file) {
+            const spinner = document.getElementById('spinner');
+            spinner.style.display = 'block';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                processDocument(text, file.name);
+                spinner.style.display = 'none';
+            };
+            reader.onerror = function() {
+                alert('Error reading file');
+                spinner.style.display = 'none';
+            };
+            reader.readAsText(file);
+        }
+
+        function processDocument(text, filename) {
+            // AI Extraction
+            const extractedTasks = [];
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            
+            const actionKeywords = ['must', 'should', 'need to', 'required', 'complete', 'submit', 'deliver', 'provide', 'book', 'secure', 'finalize', 'hire', 'schedule', 'conduct'];
+            const datePattern = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}/gi;
+            
+            lines.forEach(line => {
+                const lowerLine = line.toLowerCase();
+                const hasAction = actionKeywords.some(kw => lowerLine.includes(kw));
+                
+                // Reset regex
+                datePattern.lastIndex = 0;
+                const hasDate = datePattern.test(line);
+                
+                if ((hasAction && hasDate) || (hasAction && line.toLowerCase().includes('by'))) {
+                    datePattern.lastIndex = 0;
+                    const dateMatch = line.match(datePattern);
+                    const deadline = dateMatch ? dateMatch[0] : null;
+                    
+                    let priority = 'medium';
+                    if (/urgent|critical|asap|immediately/i.test(line)) priority = 'high';
+                    if (/low priority|when possible/i.test(line)) priority = 'low';
+                    
+                    let title = line.replace(/^[-•*\d.\s]+/, '').replace(/\b(must|should|need to|required to)\b/i, '').trim();
+                    
+                    if (title.length > 10 && title.length < 200) {
+                        extractedTasks.push({
+                            title: title.substring(0, 150),
+                            description: line,
+                            deadline: deadline,
+                            priority: priority,
+                            status: 'pending'
+                        });
+                    }
+                }
+            });
+            
+            // If no tasks found, create a placeholder
+            if (extractedTasks.length === 0) {
+                extractedTasks.push({
+                    title: 'Review document and identify action items',
+                    description: 'Document: ' + filename,
+                    deadline: null,
+                    priority: 'medium',
+                    status: 'pending'
+                });
+            }
+            
+            // Create project
+            const projectName = filename.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+            const project = {
+                id: nextProjectId++,
+                name: projectName,
+                description: `Extracted ${extractedTasks.length} tasks from ${filename}`,
+                document_name: filename,
+                created_at: new Date().toISOString(),
+                status: 'active'
+            };
+            projects.push(project);
+            
+            // Create tasks
+            extractedTasks.forEach(t => {
+                tasks.push({
+                    id: nextTaskId++,
+                    project_id: project.id,
+                    title: t.title,
+                    description: t.description,
+                    deadline: t.deadline,
+                    priority: t.priority,
+                    status: t.status,
+                    created_at: new Date().toISOString()
+                });
+            });
+            
+            saveData();
+            loadDashboard();
+            
+            alert(`Created project "${projectName}" with ${extractedTasks.length} tasks!`);
+        }
+
+        function loadDashboard() {
+            // Update stats
+            document.getElementById('stat-projects').textContent = projects.length;
+            document.getElementById('stat-tasks').textContent = tasks.length;
+            document.getElementById('stat-completed').textContent = tasks.filter(t => t.status === 'completed').length;
+            document.getElementById('stat-pending').textContent = tasks.filter(t => t.status === 'pending').length;
+
+            // Render projects
+            renderProjects();
+        }
+
+        function renderProjects() {
+            const container = document.getElementById('projects-list');
+            
+            if (projects.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📂</div>
+                        <div>No projects yet. Upload a document to get started!</div>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = projects.map(p => {
+                const projectTasks = tasks.filter(t => t.project_id === p.id);
+                const completedCount = projectTasks.filter(t => t.status === 'completed').length;
+                const totalCount = projectTasks.length;
+                
+                return `
+                    <div class="project-card" onclick="showProject(${p.id})">
+                        <div class="project-name">${escapeHtml(p.name)}</div>
+                        <div class="project-meta">${completedCount}/${totalCount} tasks completed • ${new Date(p.created_at).toLocaleDateString()}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showProject(projectId) {
+            const project = projects.find(p => p.id === projectId);
+            if (!project) return;
+            
+            document.getElementById('project-title').textContent = project.name;
+            document.getElementById('delete-btn').onclick = () => deleteProject(projectId);
+            
+            const projectTasks = tasks.filter(t => t.project_id === projectId);
+            const tasksContainer = document.getElementById('project-tasks');
+            
+            if (projectTasks.length > 0) {
+                tasksContainer.innerHTML = `
+                    <div class="task-list">
+                        ${projectTasks.map(t => `
+                            <div class="task-item">
+                                <div class="task-checkbox ${t.status === 'completed' ? 'completed' : ''}" onclick="toggleTask(${t.id}, event)">
+                                    ${t.status === 'completed' ? '✓' : ''}
+                                </div>
+                                <div class="task-title ${t.status === 'completed' ? 'completed' : ''}">${escapeHtml(t.title)}</div>
+                                ${t.deadline ? `<span class="task-tag tag-${t.priority}">${formatDate(t.deadline)}</span>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                tasksContainer.innerHTML = '<div class="empty-state">No tasks found</div>';
+            }
+
+            document.getElementById('dashboard-view').classList.add('hidden');
+            document.getElementById('project-view').classList.remove('hidden');
+        }
+
+        function toggleTask(taskId, event) {
+            event.stopPropagation();
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+            
+            task.status = task.status === 'completed' ? 'pending' : 'completed';
+            saveData();
+            
+            // Refresh view
+            const projectId = task.project_id;
+            showProject(projectId);
+        }
+
+        function deleteProject(projectId) {
+            if (!confirm('Are you sure you want to delete this project?')) return;
+            
+            const idx = projects.findIndex(p => p.id === projectId);
+            if (idx > -1) projects.splice(idx, 1);
+            
+            for (let i = tasks.length - 1; i >= 0; i--) {
+                if (tasks[i].project_id === projectId) tasks.splice(i, 1);
+            }
+            
+            saveData();
+            document.getElementById('project-view').classList.add('hidden');
+            document.getElementById('dashboard-view').classList.remove('hidden');
+            loadDashboard();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function formatDate(dateStr) {
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch {
+                return dateStr;
+            }
+        }
+    </script>
+</body>
+</html>
